@@ -1,0 +1,130 @@
+---
+- name: Monitoring Services
+  hosts: all
+  gather_facts: true
+  become: yes
+
+  tasks:
+    - name: Verify Installation of Services
+      block:
+        - name: Check if httpd is installed on host1
+          stat:
+            path: /usr/sbin/httpd
+          register: httpd_installed
+          when: inventory_hostname == 'host1'
+
+        - name: Install httpd if not installed
+          package:
+            name: httpd
+            state: present
+          when:
+            - inventory_hostname == 'host1'
+            - not httpd_installed.stat.exists
+
+        - name: Check if RabbitMQ is installed on host2
+          stat:
+            path: /path/rabbitmq
+          register: rabbitmq_installed
+          when: inventory_hostname == 'host2'
+
+        - name: Install RabbitMQ if not installed
+          package:
+            name: rabbitmq
+            state: present
+          when:
+            - inventory_hostname == 'host2'
+            - not rabbitmq_installed.stat.exists
+
+        - name: Check if PostgreSQL is installed on host3
+          stat:
+            path: /path/postgresql
+          register: postgresql_installed
+          when: inventory_hostname == 'host3'
+
+        - name: Install PostgreSQL if not installed
+          package:
+            name: postgresql
+            state: present
+          when:
+            - inventory_hostname == 'host3'
+            - not postgresql_installed.stat.exists
+
+      when: action == 'verify_install'
+      delegate_to: "{{ inventory_hostname }}"
+
+    - name: Check Disk Space
+      block:
+        - name: Gather disk facts
+          ansible.builtin.setup:
+            gather_subset: all
+          register: disk_facts
+
+        - name: Print disk usage
+          debug:
+            var: disk_facts.ansible_facts.mounts
+          when: action == 'check-disk'
+
+        - name: Send alert email if disk usage > 80%
+          mail:
+            subject: "Disk Usage Alert"
+            body: "Disk usage is above 80% on {{ inventory_hostname }}:\n{{ disk_facts.ansible_facts.mounts | selectattr('percent_used', 'greaterthan', 80) | map(attribute='device') | list | join('\n') }}"
+            to: aflal@email.com
+          when: disk_facts.ansible_facts.mounts | selectattr('percent_used', 'greaterthan', 80) | list
+
+      delegate_to: "{{ inventory_hostname }}"
+
+    - name: Check Status of Applications
+      block:
+        - name: Get status of "httpd" on host1
+          uri:
+            url: "http://status_check_host:5000/healthcheck/httpd"
+          register: httpd_status
+          when: inventory_hostname == 'host1'
+
+        - name: Get status of "rabbitmq" on host2
+          uri:
+            url: "http://status_check_host:5000/healthcheck/rabbitmq"
+          register: rabbitmq_status
+          when: inventory_hostname == 'host2'
+
+        - name: Get status of "postgresql" on host3
+          uri:
+            url: "http://status_check_host:5000/healthcheck/postgresql"
+          register: postgresql_status
+          when: inventory_hostname == 'host3'
+
+        - name: Print httpd service status
+          debug:
+            var: "HTTPD Service is Down"
+          when:
+            - httpd_status.json.service_status == 'DOWN'"
+            - inventory_hostname == 'host1'
+
+        - name: Print rabbitmq service status
+          debug:
+            var: "RabbitMQ Service is Down"
+          when:
+            - action == 'check-status'
+            - rabbitmq_status.json.service_status == 'DOWN'"
+            - inventory_hostname == 'host2'
+
+        - name: Print postgresql service status
+          debug:
+            var: "PostgresQL Service is Down"
+          when:
+            - inventory_hostname == 'host3'
+            - postgresql_status.json.service_status == 'DOWN'"
+            -
+        - name: Print application status with service_status when service is down
+          debug:
+            var: "APPLICATION is {{ }}"
+          loop:
+            - "{{ httpd_status }}"
+            - "{{ rabbitmq_status }}"
+            - "{{ postgresql_status }}"
+          when:
+            - action == 'check-status'
+            - "'down' in [item.json.service_status for item in [httpd_status, rabbitmq_status, postgresql_status]]"
+
+
+      delegate_to: "{{ inventory_hostname }}"
